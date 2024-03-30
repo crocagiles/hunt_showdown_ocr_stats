@@ -6,9 +6,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from cv2 import imread
-def crop_matchtype_roi(img_array):
-    reader = easyocr.Reader(['en'])
-    results = reader.readtext(img_array)
+def crop_matchtype_roi(reader, img_array):
+    results = reader.readtext(img_array, text_threshold=0.3)
     return [results[x][1] for x in range(len(results))]
 
 def imread_crop_dm(screenshot_png):
@@ -34,7 +33,8 @@ def find_image_pairs(folder_path, time_threshold=30):
 
 def rounded_minutes(time_str):
     # Split the time string into minutes and seconds
-    minutes, seconds = map(int, time_str.split('.'))
+    split = '.' if '.' in time_str else ':'
+    minutes, seconds = map(int, time_str.split(split))
     # Convert seconds to minutes and round to the nearest minute
     total_minutes = minutes + round(seconds / 60)
     return total_minutes
@@ -64,29 +64,34 @@ stats_extract = {
         'img_id': 'xp_cash_screenshot'
     },
     'my_kills': {
-        'roi': [715, 760, 1200, 1400],
+        'roi': [700, 770, 1230, 1330],
         'img_id': 'pentagram_screenshot'
     },
     'assists': {
-        'roi': [1150, 1200, 1550, 1650],
+        'roi': [1135, 1220, 1550, 1650],
         'img_id': 'pentagram_screenshot'
     },
     'team_kills': {
-        'roi': [1150, 1200, 900, 1000],
+        'roi': [1140, 1210, 900, 1000],
         'img_id': 'pentagram_screenshot'
     },
     'hunter_name': {
-        'roi': [380, 425, 900, 1800 ],
+        'roi': [370, 430, 900, 1800 ],
         'img_id': 'pentagram_screenshot'
     }
 }
 
-dir_with_pairs = r'C:\Users\giles\PycharmProjects\hunt_ocr_playtime_vs_xp\_images'
+dir_with_pairs = Path(r'C:\Users\giles\PycharmProjects\hunt_ocr_playtime_vs_xp\_images')
 pairs = find_image_pairs(dir_with_pairs)
 details = []
-debug = False
+debug_rois = True
+reader = easyocr.Reader(['en'], gpu=True)
+
 for pair in tqdm(pairs):
+
+
     pairs_fp = [Path(dir_with_pairs) / x for x in pair]
+    pair_id  = '_'.join([p.name[-9:-4] for p in pairs_fp])  # eg '(141)_(142)'
     im1, im2 = [imread_crop_dm(str(x)) for x in pairs_fp]
 
     # determine which image is which (match timer vs. match details)
@@ -106,44 +111,44 @@ for pair in tqdm(pairs):
         roi = info['roi']
         img_cropped = img_arr[roi[0]:roi[1],roi[2]:roi[3],:]
         info['img_cropped'] = img_cropped
-        ocr = crop_matchtype_roi(img_cropped)
+        ocr = crop_matchtype_roi(reader, img_cropped)
         info['ocr_raw'] = ocr
 
     # Process and save OCR data in useful format
     ocr_raw_dict = {stat: info['ocr_raw'] for stat, info in stats_extract.items()}
     processed = {
-        'matchtype': 'Bounty Hunt' if ocr_raw_dict['matchtype'] == 'MISSION SUMMARY' else 'Soul Survivor',
+        'matchtype': 'Bounty Hunt' if ocr_raw_dict['matchtype'][0] == 'MISSION SUMMARY' else 'Soul Survivor',
         'matchtime': rounded_minutes(ocr_raw_dict['matchtime'][0]),
         'cash': int(ocr_raw_dict['cash_xp'][1].replace(',', '')),
         'xp': int(ocr_raw_dict['cash_xp'][0].replace(',', '')),
-        'my_kills': int(ocr_raw_dict['my_kills'][0])
-
+        'my_kills': int(ocr_raw_dict['my_kills'][0]) if (ocr_raw_dict['my_kills']) else 0,
+        'assists': int(ocr_raw_dict['assists'][0]) if (ocr_raw_dict['assists']) else 0,
+        'team_kills': int(ocr_raw_dict['team_kills'][0]) if (ocr_raw_dict['team_kills']) else 0,
+        'hunter_name': ocr_raw_dict['hunter_name'][0]
     }
+    details.append(processed)
 
-    if debug:
+    if debug_rois:
+        debug_save_loc = Path('debug_imgs')
+        if not debug_save_loc.exists():
+            debug_save_loc.mkdir()
+
         fig, axs = plt.subplots(1, len(stats_extract.items()), figsize=(20, 5))
         for i, (stat, info) in enumerate(stats_extract.items()):
-            axs[i].imshow(info['img_cropped'])#, label=f'Subplot {i + 1}')
-            axs[i].set_title(stat)
+            label = f'{stat}: {ocr_raw_dict[stat]}'
+            axs[i].imshow(info['img_cropped'])
+            axs[i].set_title(label)
+            # axs[i].set_title(stat)
             axs[i].set_axis_off()
         # Adjusting layout
         plt.tight_layout()
         # Display the plot
-        plt.show()
+        plotname = f'{pair_id}_dbg.jpg'
+        save_path = debug_save_loc / plotname
+        plt.savefig(save_path)
+        plt.close()
 
-
-        # ocr = crop_matchtype_roi(img_cropped)
-
-
-    # type = 'Bounty Hunt' if matchtype[0] == 'MISSION SUMMARY' else 'Soul Survivor'
-    # details.append(f'''
-    # ID:         {[x.name[-8:-3] for x in pairs_fp]}
-    # Match type: {type}
-    # Match Time: {rounded_minutes(matchtime[0])} Minutes
-    # Total XP:   {cash_xp[0]}
-    # Total $:    {cash_xp[1]}
-    # ''')
-
+    # break
 for d in details:
     print(d)
 
