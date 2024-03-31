@@ -5,8 +5,9 @@ from pathlib import Path
 import platform
 from functools import lru_cache
 import pprint
-import pandas as pd
+from copy import deepcopy
 
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -70,7 +71,7 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False):
             'roi': [111, 184, 850, 1681],
             'img_id': 'mission_sum_scrnshot'
         },
-        'match_timer': {
+        'match_timer_secs': {
             'roi': [860, 900, 1840, 1950],
             'img_id': 'last_match_scrnshot'
         },
@@ -131,7 +132,8 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False):
         processed = {
             'match_type': 'Bounty Hunt' if ocr_raw_dict['match_type'][0] == 'MISSION SUMMARY' else 'Soul Survivor',
             'match_datetime': stmp_date,
-            'match_timer': match_timer_to_secs(ocr_raw_dict['match_timer'][0]),
+            'match_timer_secs': match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]),
+            'match_timer_mins': round(match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]) / 60),
             'cash': int(ocr_raw_dict['cash_xp'][1].replace(',', '')),
             'xp': int(ocr_raw_dict['cash_xp'][0].replace(',', '')),
             'my_kills': int(ocr_raw_dict['my_kills'][0]) if (ocr_raw_dict['my_kills']) else 0,
@@ -144,7 +146,9 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False):
         for key, val in list(processed.items()):
             if key in skip_keys:
                 continue
-            processed[f'{key}_per_sec'] = val / processed['match_timer']
+            processed[f'{key}_per_sec'] = val / processed['match_timer_secs']
+            processed[f'{key}_per_min'] = val / (processed['match_timer_secs'] / 60)
+            processed[f'{key}_per_hour'] = val / (processed['match_timer_secs'] / 60 ** 2)
 
         details.append(processed)
 
@@ -206,25 +210,36 @@ def get_summary_from_data(gamedata_list):
 
 def plot_summary_data(summary_dict):
 
-    data_by_match = summary_dict['data_by_match']
-    df = pd.DataFrame(data_by_match)
+    plot_config  = {}
 
-    to_hist_plot = ['match_timer_per_sec', 'team_kills_per_sec', 'cash_per_sec', 'cash', 'match_timer', 'team_kills' ]
+    colors = ['blue', 'red']
+    to_hist_plot = ['my_kills_per_hour', 'team_kills_per_hour', 'cash_per_min', 'cash', 'match_timer_mins', 'team_kills' ]
+    all_data  = [y['data_by_match'] for x, y in summary_dict.items()] # list with length of two
+    df_all_data =  pd.DataFrame([item for sublist in all_data for item in sublist])  # combines both match type data
     for stat in to_hist_plot:
 
-        # Plot histogram
-        if 'per_sec' in stat:
-            df[stat] = df[stat].apply(lambda x: x * 60 * 60)  # kps -> kph
-        if 'match_timer' in stat:
-            df[stat] = df[stat].apply(lambda x: x / 60)  # secs -> mins
+        for i_mtype, mtype in enumerate(list(summary_dict.keys())):
+            # data_by_match = summary_dict[mtype]
+            df = pd.DataFrame(summary_dict[mtype]['data_by_match'])
+            # Plot histogram
+            # if 'per_sec' in stat:
+            #     df[stat] = df[stat].apply(lambda x: x * 60 * 60)  # kps -> kph
+            #     df_all_data[stat] = df_all_data[stat].apply(lambda x: x * 60 * 60)  # kps -> kph
+            # if 'match_timer_secs' in stat:
+            #     df[stat] = df[stat].apply(lambda x: x / 60)  # secs -> mins
+            #     df_all_data[stat] = df_all_data[stat].apply(lambda x: x / 60)  # secs -> mins
 
-        sns.histplot(data =df, x=stat, kde=True, color="skyblue", bins=10)
+            n_bins = 10
+            bin_range = np.linspace(min(df_all_data[stat]), max(df_all_data[stat]), n_bins)
+
+            sns.histplot(data=df, x=stat, kde=True, bins=bin_range, label=mtype, color=colors[i_mtype])
 
         # Add labels and title
-        stat = stat.replace('per_sec', ' Per Hour ')
-        plt.title(f'Distribution of {stat}')
-        plt.xlabel(stat)
+        stat_str = stat.replace('per_sec', ' Per Hour ')
+        plt.title(f'Distribution of {stat_str}')
+        plt.xlabel(stat_str)
         plt.ylabel('Frequency')
+        plt.legend()
 
         # Customize grid and ticks
         # plt.grid(True, linestyle='--', alpha=0.7)
@@ -233,7 +248,7 @@ def plot_summary_data(summary_dict):
         # Show plot
         plt.show()
 
-    # TODO corrolation of match time to dollar/min, xp / min
+    # TODO corrolation of match time to dollar/min, xp / min,
 
     return
 def main(dir_with_pairs, debug=False):
@@ -245,7 +260,7 @@ def main(dir_with_pairs, debug=False):
     pp = pprint.PrettyPrinter(indent=4)
     pp.pprint(summary)
 
-    plot_summary_data(summary['Bounty Hunt'])
+    plot_summary_data(summary)
 
     return summary
 
