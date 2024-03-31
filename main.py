@@ -4,8 +4,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 from tqdm import tqdm
 from cv2 import imread
+import numpy as np
+
 def crop_matchtype_roi(reader, img_array):
     results = reader.readtext(img_array, text_threshold=0.3)
     return [results[x][1] for x in range(len(results))]
@@ -40,44 +43,36 @@ def rounded_minutes(time_str):
     return total_minutes
 
 
-#               y start, y end, x start, x end
-roi_matchtype = [111, 184, 850,  1681]
-roi_matchtime = [860, 900, 1840, 1950]
-roi_cash_xp = [950, 995, 2000, 2200]
-roi_my_kills = [715, 760, 1200, 1400]
-roi_assists = [1150, 1200, 1550, 1650]
-roi_team_kills = [1150, 1200, 900, 1000]
-roi_hunter_name = [380, 425, 800, 1600 ]
-
 # Dict with info on how to extract details, which image to extract from, etc
 stats_extract = {
     'matchtype': {
+            # y start, y end, x start, x end
         'roi': [111, 184, 850,  1681],
-        'img_id': 'xp_cash_screenshot'
+        'img_id': 'mission_sum_scrnshot'
     },
     'matchtime': {
         'roi': [860, 900, 1840, 1950],
-        'img_id': 'pentagram_screenshot'
+        'img_id': 'last_match_scrnshot'
     },
     'cash_xp': {
         'roi': [950, 995, 2000, 2200],
-        'img_id': 'xp_cash_screenshot'
+        'img_id': 'mission_sum_scrnshot'
     },
     'my_kills': {
         'roi': [700, 770, 1230, 1330],
-        'img_id': 'pentagram_screenshot'
+        'img_id': 'last_match_scrnshot'
     },
     'assists': {
         'roi': [1135, 1220, 1550, 1650],
-        'img_id': 'pentagram_screenshot'
+        'img_id': 'last_match_scrnshot'
     },
     'team_kills': {
         'roi': [1140, 1210, 900, 1000],
-        'img_id': 'pentagram_screenshot'
+        'img_id': 'last_match_scrnshot'
     },
     'hunter_name': {
         'roi': [370, 430, 900, 1800 ],
-        'img_id': 'pentagram_screenshot'
+        'img_id': 'last_match_scrnshot'
     }
 }
 
@@ -103,9 +98,9 @@ for pair in tqdm(pairs):
 
     # Get OCR raw data for each stat
     for stat, info in stats_extract.items():
-        if info['img_id'] == 'pentagram_screenshot':
+        if info['img_id'] == 'last_match_scrnshot':
             img_arr = im2
-        elif info['img_id'] == 'xp_cash_screenshot':
+        elif info['img_id'] == 'mission_sum_scrnshot':
             img_arr = im1
 
         roi = info['roi']
@@ -152,4 +147,33 @@ for pair in tqdm(pairs):
 for d in details:
     print(d)
 
+cache = [{'matchtype': 'Soul Survivor', 'matchtime': 13, 'cash': 640, 'xp': 4180, 'my_kills': 4, 'assists': 0, 'team_kills': 4, 'hunter_name': 'Miss Natalie Hall'}, {'matchtype': 'Bounty Hunt', 'matchtime': 16, 'cash': 300, 'xp': 2882, 'my_kills': 1, 'assists': 2, 'team_kills': 3, 'hunter_name': 'Kaiden Lockheart'}, {'matchtype': 'Bounty Hunt', 'matchtime': 6, 'cash': 1100, 'xp': 1562, 'my_kills': 0, 'assists': 0, 'team_kills': 0, 'hunter_name': 'The Prodigal Daughter'}, {'matchtype': 'Bounty Hunt', 'matchtime': 11, 'cash': 300, 'xp': 2816, 'my_kills': 0, 'assists': 1, 'team_kills': 2, 'hunter_name': 'The Rat'}, {'matchtype': 'Bounty Hunt', 'matchtime': 4, 'cash': 50, 'xp': 957, 'my_kills': 0, 'assists': 0, 'team_kills': 1, 'hunter_name': 'Deston Jacquet'}, {'matchtype': 'Bounty Hunt', 'matchtime': 18, 'cash': 742, 'xp': 4417, 'my_kills': 0, 'assists': 2, 'team_kills': 1, 'hunter_name': 'The Prodigal Daughter'}, {'matchtype': 'Bounty Hunt', 'matchtime': 22, 'cash': 2708, 'xp': 8892, 'my_kills': 2, 'assists': 2, 'team_kills': 7, 'hunter_name': 'Felis'}, {'matchtype': 'Bounty Hunt', 'matchtime': 23, 'cash': 807, 'xp': 5511, 'my_kills': 2, 'assists': 0, 'team_kills': 6, 'hunter_name': 'Darchelle Black'}, {'matchtype': 'Bounty Hunt', 'matchtime': 14, 'cash': 625, 'xp': 2981, 'my_kills': 2, 'assists': 0, 'team_kills': 2, 'hunter_name': 'Darchelle Black'}, {'matchtype': 'Bounty Hunt', 'matchtime': 36, 'cash': 1321, 'xp': 13742, 'my_kills': 4, 'assists': 1, 'team_kills': 9, 'hunter_name': 'Wilhelm Storch'}, {'matchtype': 'Bounty Hunt', 'matchtime': 14, 'cash': 500, 'xp': 7007, 'my_kills': 1, 'assists': 0, 'team_kills': 3, 'hunter_name': 'Herbert Lenz'}, {'matchtype': 'Bounty Hunt', 'matchtime': 14, 'cash': 675, 'xp': 4070, 'my_kills': 0, 'assists': 0, 'team_kills': 1, 'hunter_name': 'Wilhelm Storch'}]
 
+
+def sum_from_dicts(lst_dct, key):
+    return np.sum([m[key] for m in lst_dct])
+
+batch_summary = {}
+for ss_or_bh in ['Soul Survivor', 'Bounty Hunt']:
+
+    matches = [m for m in cache if m['matchtype'] == ss_or_bh]
+    batch_summary[ss_or_bh] = {}
+    batch_for_mytype = batch_summary[ss_or_bh]  # pointer
+
+    # skips keys can can't be summed
+    skip_keys = ['matchtype', 'hunter_name', 'matchtype']
+
+    keys_iter = matches[0].keys()
+    for st in keys_iter:  # matchtime, my_kills, etc
+        # Skip keys that can't be summed
+        if st in skip_keys:
+            continue
+        total = sum_from_dicts(matches, st)
+        batch_for_mytype[st] = total
+
+    # per minute calculation can only be done after time is summed
+    for st in keys_iter:
+        if st in skip_keys:
+            continue
+        per_min_key = st + '_per_min'
+        batch_for_mytype[per_min_key] = batch_for_mytype[st] / batch_for_mytype['matchtime']
