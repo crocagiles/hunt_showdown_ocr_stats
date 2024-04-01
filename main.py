@@ -27,7 +27,7 @@ def imread_crop_dm(screenshot_png):
         img_array = img_array[1270:2709, 2160:]
     return img_array
 
-def find_image_pairs(folder_path, time_threshold=30):
+def find_image_pairs(folder_path, time_threshold=30, tonight= False):
     image_pairs = []
     files = sorted(os.listdir(folder_path))
     for i in range(len(files)):
@@ -37,6 +37,11 @@ def find_image_pairs(folder_path, time_threshold=30):
             image1_created = datetime.fromtimestamp(os.path.getmtime(image1_path))
             image2_created = datetime.fromtimestamp(os.path.getmtime(image2_path))
             time_difference = abs((image2_created - image1_created).total_seconds())
+
+            current_datetime = datetime.now()
+            since_game = current_datetime - image1_created
+            if tonight and since_game > timedelta(hours=12):
+                continue
             if time_difference <= time_threshold:
                 image_pairs.append((files[i], files[j]))
     return image_pairs
@@ -58,7 +63,7 @@ def match_timer_to_secs(time_str):
     return total_seconds
 
 @lru_cache(maxsize=None)
-def get_data_from_image_pairs(dir_with_pairs, debug_rois=False):
+def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
     '''
     :param dir_with_pairs: Image directory containing pairs of hunt screenshots
     :param debug_rois: Bool for saving _debug_imgs directory with diagnostic images
@@ -97,7 +102,7 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False):
         }
     }
 
-    pairs = find_image_pairs(dir_with_pairs)
+    pairs = find_image_pairs(dir_with_pairs, tonight=tonight)
     details = []
     reader = easyocr.Reader(['en'])  # init ocr reader only once
 
@@ -129,54 +134,63 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False):
 
         # Process and save OCR data in useful format
         ocr_raw_dict = {stat: info['ocr_raw'] for stat, info in stats_extract.items()}
-        processed = {
-            'match_type': 'Bounty Hunt' if ocr_raw_dict['match_type'][0] == 'MISSION SUMMARY' else 'Soul Survivor',
-            'match_datetime': stmp_date,
-            'match_timer_secs': match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]),
-            'match_timer_mins': round(match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]) / 60),
-            'cash': int(ocr_raw_dict['cash_xp'][1].replace(',', '')),
-            'xp': int(ocr_raw_dict['cash_xp'][0].replace(',', '')),
-            'my_kills': int(ocr_raw_dict['my_kills'][0]) if (ocr_raw_dict['my_kills']) else 0,
-            'assists': int(ocr_raw_dict['assists'][0]) if (ocr_raw_dict['assists']) else 0,
-            'team_kills': int(ocr_raw_dict['team_kills'][0]) if (ocr_raw_dict['team_kills']) else 0,
-            'hunter_name': ocr_raw_dict['hunter_name'][0]
-        }
+        try:
+            processed = {
+                'match_type': 'Bounty Hunt' if ocr_raw_dict['match_type'][0] == 'MISSION SUMMARY' else 'Soul Survivor',
+                'match_datetime': stmp_date,
+                'match_timer_secs': match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]),
+                'match_timer_mins': round(match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]) / 60),
+                'cash': int(ocr_raw_dict['cash_xp'][1].replace(',', '')),
+                'xp': int(ocr_raw_dict['cash_xp'][0].replace(',', '')),
+                'my_kills': int(ocr_raw_dict['my_kills'][0]) if (ocr_raw_dict['my_kills']) else 0,
+                'assists': int(ocr_raw_dict['assists'][0]) if (ocr_raw_dict['assists']) else 0,
+                'team_kills': int(ocr_raw_dict['team_kills'][0]) if (ocr_raw_dict['team_kills']) else 0,
+                'hunter_name': ocr_raw_dict['hunter_name'][0]
+            }
+        except IndexError:
+            processed = {}
+            gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
         # per minute calculations
-        skip_keys = ['match_type', 'hunter_name', 'match_type', 'match_datetime']
+        skip_keys = ['match_type', 'hunter_name', 'match_timer_secs', 'match_timer_mins', 'match_datetime']
         for key, val in list(processed.items()):
             if key in skip_keys:
                 continue
             processed[f'{key}_per_sec'] = val / processed['match_timer_secs']
             processed[f'{key}_per_min'] = val / (processed['match_timer_secs'] / 60)
-            processed[f'{key}_per_hour'] = val / (processed['match_timer_secs'] / 60 ** 2)
+            processed[f'{key}_per_hour'] = val / (processed['match_timer_secs'] / 60 / 60)
 
         details.append(processed)
 
-        if debug_rois:
-            debug_save_loc = Path('debug_imgs')
-            if not debug_save_loc.exists():
-                debug_save_loc.mkdir()
+        # if debug_rois:
+        #     debug_save_loc = Path('debug_imgs')
+        #     if not debug_save_loc.exists():
+        #         debug_save_loc.mkdir()
 
-            fig, axs = plt.subplots(1, len(stats_extract.items()), figsize=(20, 5))
-            for i, (stat, info) in enumerate(stats_extract.items()):
-                label = f'{stat}: {ocr_raw_dict[stat]}'
-                axs[i].imshow(info['img_cropped'])
-                axs[i].set_title(label)
-                # axs[i].set_title(stat)
-                axs[i].set_axis_off()
-            # Adjusting layout
-            plt.tight_layout()
-            # Display the plot
-            plotname = f'{pair_id}_dbg.jpg'
-            save_path = debug_save_loc / plotname
-            plt.savefig(save_path)
-            plt.close()
+
 
     return details
 
+def gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, fname):
+    debug_save_loc = Path('debug_imgs')
+    if not debug_save_loc.exists():
+        debug_save_loc.mkdir()
 
+    fig, axs = plt.subplots(1, len(stats_extract.items()), figsize=(20, 5))
+    for i, (stat, info) in enumerate(stats_extract.items()):
+        label = f'{stat}: {ocr_raw_dict[stat]}'
+        axs[i].imshow(info['img_cropped'])
+        axs[i].set_title(label)
+        # axs[i].set_title(stat)
+        axs[i].set_axis_off()
+    # Adjusting layout
+    plt.tight_layout()
+    # Display the plot
+    plotname = fname
+    save_path = debug_save_loc / plotname
+    plt.savefig(save_path)
+    plt.close()
 
-    # break
+    return
 
 def get_summary_from_data(gamedata_list):
     batch_summary = {}
@@ -197,7 +211,8 @@ def get_summary_from_data(gamedata_list):
             # Skip keys that can't be summed
             if stat in skip_keys:
                 continue
-            total = np.sum([m[stat] for m in games_list])
+            func = np.mean if 'per_' in stat else np.sum
+            total = func([m[stat] for m in games_list])
             batch_for_mytype[stat] = total
 
         # range of dates and times that this batch covers
@@ -208,14 +223,54 @@ def get_summary_from_data(gamedata_list):
 
     return batch_summary
 
-def plot_summary_data(summary_dict):
+def plot_lines(summary_dict, to_plot):
+    # all_data = [y['data_by_match'] for x, y in summary_dict.items()]  # list with length of two
+    # df_all_data = pd.DataFrame([item for sublist in all_data for item in sublist])  # combines both match type data
+    fig, axs = plt.subplots(len(to_plot), figsize=(6, 12))
+    fig.suptitle('Session Summary', fontsize=20, fontweight='bold')
+    for i, stat in enumerate(to_plot):
+        for i_mtype, mtype in enumerate(list(summary_dict.keys())):
+            if mtype == 'Soul Survivor':
+                continue
+            is_multi_axis = True if type(stat) == list else False
+            df = pd.DataFrame(summary_dict[mtype]['data_by_match'])
+            x_range = range(1, df.shape[0] + 1)
+            if not is_multi_axis:
+                sns.lineplot(data=df, x=x_range, y=stat, label=stat, ax=axs[i])
+                axs[i].set_ylabel(stat.replace('per_sec', ' Per Hour '))
+            else:
+                sns.lineplot(data=df, x=x_range, y=stat[0], label=stat[0], ax=axs[i])
+                if not stat[1] == 'my_kills':
+                    ax2 = axs[i].twinx()
+                else: ax2 = axs[i]
+                sns.lineplot(data=df, x=x_range, y=stat[1], label=stat[1], ax=ax2, ls='--', color='green')
+                axs[i].set_ylabel(stat[0])
+                ax2.set_ylabel(stat[1].replace('per_sec', ' Per Hour '))
+                ax2.legend()
 
-    plot_config  = {}
+
+            # Add labels and title
+            stat_str = stat.replace('per_sec', ' Per Hour ') if not is_multi_axis else f'{stat[0]} | {stat[1].replace('per_sec', ' Per Hour')}'
+            axs[i].set_title(f'{stat_str} by game')
+            axs[i].set_xlabel('Match Number')
+            axs[i].legend()
+
+            axs[i].xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+
+        # Customize grid and ticks
+        # plt.grid(True, linestyle='--', alpha=0.7)
+
+        # Show plot
+    plt.tight_layout()
+    plt.show()
+
+    return
+def plot_hists(summary_dict, to_hist_plot ):
+    plot_config = {}
 
     colors = ['blue', 'red']
-    to_hist_plot = ['my_kills_per_hour', 'team_kills_per_hour', 'cash_per_min', 'cash', 'match_timer_mins', 'team_kills' ]
-    all_data  = [y['data_by_match'] for x, y in summary_dict.items()] # list with length of two
-    df_all_data =  pd.DataFrame([item for sublist in all_data for item in sublist])  # combines both match type data
+    all_data = [y['data_by_match'] for x, y in summary_dict.items()]  # list with length of two
+    df_all_data = pd.DataFrame([item for sublist in all_data for item in sublist])  # combines both match type data
     for stat in to_hist_plot:
 
         for i_mtype, mtype in enumerate(list(summary_dict.keys())):
@@ -247,23 +302,37 @@ def plot_summary_data(summary_dict):
 
         # Show plot
         plt.show()
+    return
+def plot_summary_data(summary_dict):
+
+
+    to_hist_plot= ['xp_per_min', 'my_kills_per_hour', 'team_kills_per_hour', 'cash_per_min', 'cash',
+       'match_timer_mins', 'team_kills']
+
+    # plot_hists(summary_dict, to_hist_plot)
+    to_line_plot = [['team_kills', 'my_kills'], ['xp', 'xp_per_min'], ['cash', 'cash_per_min'], 'match_timer_mins']
+    plot_lines(summary_dict, to_line_plot)
+
+    # plot correlations
 
     # TODO corrolation of match time to dollar/min, xp / min,
 
     return
+def filter_key(d, key_to_ignore):
+    return {k: v for k, v in d.items() if k != key_to_ignore}
 def main(dir_with_pairs, debug=False):
 
 
-    game_data_list = get_data_from_image_pairs(dir_with_pairs, debug_rois=debug)
+    game_data_list = get_data_from_image_pairs(dir_with_pairs, debug_rois=debug, tonight=True)
     summary = get_summary_from_data(game_data_list)
 
     pp = pprint.PrettyPrinter(indent=4)
-    pp.pprint(summary)
+    pp.pprint(filter_key(summary, 'data_by_match'))
 
     plot_summary_data(summary)
 
     return summary
 
 if __name__ == '__main__':
-    dir_with_pairs = Path(r'C:\Users\giles\PycharmProjects\hunt_ocr_playtime_vs_xp\_images')
+    dir_with_pairs = Path(r'C:\Users\giles\Pictures\Screenshots')
     main(dir_with_pairs)
