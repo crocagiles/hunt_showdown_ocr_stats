@@ -6,6 +6,7 @@ import platform
 from functools import lru_cache
 import pprint
 from copy import deepcopy
+import pickle
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -44,6 +45,12 @@ def find_image_pairs(folder_path, time_threshold=30, tonight= False):
                 continue
             if time_difference <= time_threshold:
                 image_pairs.append((files[i], files[j]))
+
+    if not image_pairs:
+        error = f'No Image Pairs Found. Screenshot pair must be captured within {time_threshold} seconds of eachother.'
+        error += ' Tonight keyword is enabled. only screenshots from last 12 hours are considered.' if tonight else ''
+        raise IndexError(error)
+
     return image_pairs
 def get_creation_time_windows(path):
     if platform.system() == 'Windows':
@@ -62,7 +69,7 @@ def match_timer_to_secs(time_str):
     total_seconds = (minutes * 60) + seconds
     return total_seconds
 
-@lru_cache(maxsize=None)
+# @lru_cache(maxsize=None)
 def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
     '''
     :param dir_with_pairs: Image directory containing pairs of hunt screenshots
@@ -70,46 +77,39 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
     :return:
     '''
     # Dict with info on how to extract details, which image to extract from, etc
-    stats_extract = {
-        'match_type': {
-            # y start, y end, x start, x end
-            'roi': [111, 184, 850, 1681],
-            'img_id': 'mission_sum_scrnshot'
-        },
-        'match_timer_secs': {
-            'roi': [860, 900, 1840, 1950],
-            'img_id': 'last_match_scrnshot'
-        },
-        'cash_xp': {
-            'roi': [950, 995, 2000, 2200],
-            'img_id': 'mission_sum_scrnshot'
-        },
-        'my_kills': {
-            'roi': [700, 770, 1230, 1330],
-            'img_id': 'last_match_scrnshot'
-        },
-        'assists': {
-            'roi': [1135, 1220, 1550, 1650],
-            'img_id': 'last_match_scrnshot'
-        },
-        'team_kills': {
-            'roi': [1140, 1210, 900, 1000],
-            'img_id': 'last_match_scrnshot'
-        },
-        'hunter_name': {
-            'roi': [370, 430, 900, 1800],
-            'img_id': 'last_match_scrnshot'
-        }
-    }
 
+    from roi_coordinates import stats_extract  # here is the dict with the hard coded pixel values for ROIs
     pairs = find_image_pairs(dir_with_pairs, tonight=tonight)
+
     details = []
     reader = easyocr.Reader(['en'])  # init ocr reader only once
+
+    # read from cached data if it exists
+    path_cache = Path('_cache.pickle')
+    cache_exists = path_cache.exists()
+    if cache_exists:
+        with open(str(path_cache), 'rb') as f:
+            loaded_cache = pickle.load(f)
+    else:
+        loaded_cache = None
+
 
     for pair in tqdm(pairs):
         pairs_fp = [Path(dir_with_pairs) / x for x in pair]
         stmp_date = get_creation_time_windows(pairs_fp[0])
         pair_id = '_'.join([p.name[-9:-4] for p in pairs_fp])  # eg '(141)_(142)'
+
+        # Skip image pair if it already exists in the cache
+        try:
+            already_processed = (loaded_cache['match_id'] == pair_id).any()
+        except TypeError:
+            already_processed = False
+            pass
+        if already_processed:
+            print(f'Skipping {pair_id}, loaded from cache')
+            continue
+
+
         im1, im2 = [imread_crop_dm(str(x)) for x in pairs_fp]
 
         # determine which image is which (mission summary vs. last match)
@@ -136,6 +136,7 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
         ocr_raw_dict = {stat: info['ocr_raw'] for stat, info in stats_extract.items()}
         try:
             processed = {
+                'match_id': pair_id,
                 'match_type': 'Bounty Hunt' if ocr_raw_dict['match_type'][0] == 'MISSION SUMMARY' else 'Soul Survivor',
                 'match_datetime': stmp_date,
                 'match_timer_secs': match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]),
@@ -147,11 +148,14 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
                 'team_kills': int(ocr_raw_dict['team_kills'][0]) if (ocr_raw_dict['team_kills']) else 0,
                 'hunter_name': ocr_raw_dict['hunter_name'][0]
             }
-        except IndexError:
-            processed = {}
+        except IndexError(f'Error extracting data with OCR. See README and {pair_id}_dbg.jpg'):
             gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
+            continue
+        if debug_rois:
+            gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
+
         # per minute calculations
-        skip_keys = ['match_type', 'hunter_name', 'match_timer_secs', 'match_timer_mins', 'match_datetime']
+        skip_keys = ['match_id', 'match_type', 'hunter_name', 'match_timer_secs', 'match_timer_mins', 'match_datetime']
         for key, val in list(processed.items()):
             if key in skip_keys:
                 continue
@@ -161,14 +165,32 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
 
         details.append(processed)
 
-        # if debug_rois:
-        #     debug_save_loc = Path('debug_imgs')
-        #     if not debug_save_loc.exists():
-        #         debug_save_loc.mkdir()
+    # add any newly extracted information to the dataframe
 
+    if loaded_cache is not None and details:  # if there is a loaded cache, append any newly extracted info to it.
+        df = loaded_cache
+        df_to_append = pd.DataFrame(details)
+        print(f'Adding to Cache: {df_to_append['match_id']}')
+        df = pd.concat([df, df_to_append], ignore_index=True)
+        update_cache = True
+    elif loaded_cache is None and details:  # No cache file was present, we'll write a new one
+        print(f'Writing new cache! -> {path_cache}')
+        df = pd.DataFrame(details)
+        update_cache = True
+    else:  # If there is no loaded cache, OR if there is a loaded cache and there is no new info to append to it.
+        if loaded_cache is None:
+            df = pd.DataFrame(details)
+        else:
+            df = loaded_cache
+        print('Nothing to add to Cache.')
+        update_cache = False
 
+    if update_cache:
+        with open(path_cache, 'wb') as f:
+            pickle.dump(df, f)
+        print('Cache written successfully')
 
-    return details
+    return df
 
 def gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, fname):
     debug_save_loc = Path('debug_imgs')
@@ -177,7 +199,12 @@ def gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, fname):
 
     fig, axs = plt.subplots(1, len(stats_extract.items()), figsize=(20, 5))
     for i, (stat, info) in enumerate(stats_extract.items()):
-        label = f'{stat}: {ocr_raw_dict[stat]}'
+        label = f''' Stat name: {stat}\n
+        Val: {ocr_raw_dict[stat]})
+        {stats_extract[stat]['roi']} 
+        [y_start, y_end, x_start, x_end]
+        img: {stats_extract[stat]['img_id']}
+        '''
         axs[i].imshow(info['img_cropped'])
         axs[i].set_title(label)
         # axs[i].set_title(stat)
@@ -309,7 +336,7 @@ def plot_summary_data(summary_dict):
     to_hist_plot= ['xp_per_min', 'my_kills_per_hour', 'team_kills_per_hour', 'cash_per_min', 'cash',
        'match_timer_mins', 'team_kills']
 
-    # plot_hists(summary_dict, to_hist_plot)
+    plot_hists(summary_dict, to_hist_plot)
     to_line_plot = [['team_kills', 'my_kills'], ['xp', 'xp_per_min'], ['cash', 'cash_per_min'], 'match_timer_mins']
     plot_lines(summary_dict, to_line_plot)
 
@@ -323,16 +350,16 @@ def filter_key(d, key_to_ignore):
 def main(dir_with_pairs, debug=False):
 
 
-    game_data_list = get_data_from_image_pairs(dir_with_pairs, debug_rois=debug, tonight=True)
-    summary = get_summary_from_data(game_data_list)
+    df_game_data = get_data_from_image_pairs(dir_with_pairs, debug_rois=debug, tonight=False)
+    # summary = get_summary_from_data(game_data_list)
+    #
+    # pp = pprint.PrettyPrinter(indent=4)
+    # pp.pprint(filter_key(summary, 'data_by_match'))
+    #
+    # plot_summary_data(summary)
 
-    pp = pprint.PrettyPrinter(indent=4)
-    pp.pprint(filter_key(summary, 'data_by_match'))
-
-    plot_summary_data(summary)
-
-    return summary
+    return #summary
 
 if __name__ == '__main__':
     dir_with_pairs = Path(r'C:\Users\giles\Pictures\Screenshots')
-    main(dir_with_pairs)
+    main(dir_with_pairs, debug=True)
