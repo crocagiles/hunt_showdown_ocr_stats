@@ -69,6 +69,7 @@ def match_timer_to_secs(time_str):
     total_seconds = (minutes * 60) + seconds
     return total_seconds
 
+
 # @lru_cache(maxsize=None)
 def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
     '''
@@ -129,11 +130,12 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
 
             roi = info['roi']
             img_cropped = img_arr[roi[0]:roi[1], roi[2]:roi[3], :]
+
+            # img processing to improve detection
+            # kernel = np.array([[-1, -1, -1], [-1, 5, -1], [-1, -1, -1]])
+            # im_sharp = cv2.filter2D(img_cropped, -1, kernel)
             info['img_cropped'] = img_cropped
-            # Try sharpening image to improve results..
-            kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
-            im_sharp = cv2.filter2D(img_cropped, -1, kernel)
-            ocr = crop_match_type_roi(reader, im_sharp)
+            ocr = crop_match_type_roi(reader, img_cropped)
             info['ocr_raw'] = ocr
 
         # Process and save OCR data in useful format
@@ -152,7 +154,7 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
                 'team_kills': int(ocr_raw_dict['team_kills'][0]) if (ocr_raw_dict['team_kills']) else 0,
                 'hunter_name': ocr_raw_dict['hunter_name'][0]
             }
-        except IndexError(f'Error extracting data with OCR. See README and {pair_id}_dbg.jpg'):
+        except:# CustomError(f'Error extracting data with OCR. See README and {pair_id}_dbg.jpg'):
             gen_ocr_diagnostic(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
             continue
         if debug_rois:
@@ -224,38 +226,11 @@ def gen_ocr_diagnostic(stats_extract, ocr_raw_dict, fname):
 
     return
 
-def get_summary_from_data(gamedata_list):
-    batch_summary = {}
-    for ss_or_bh in ['Soul Survivor', 'Bounty Hunt']:
 
-        games_list = [m for m in gamedata_list if m['match_type'] == ss_or_bh]
-        batch_summary[ss_or_bh] = {}
-        batch_for_mytype = batch_summary[ss_or_bh]  # pointer
 
-        batch_for_mytype['data_by_match'] = games_list  # save individual game data for plotting later
+def plot_lines(df_summary, to_plot, text_summary):
 
-        # skips keys can can't be summed
-        skip_keys = ['match_type', 'hunter_name', 'match_type', 'match_datetime']
 
-        # Run Calculations across batch of games
-        keys_iter = games_list[0].keys()
-        for stat in keys_iter:  # match_timer, my_kills, etc
-            # Skip keys that can't be summed
-            if stat in skip_keys:
-                continue
-            func = np.mean if 'per_' in stat else np.sum
-            total = func([m[stat] for m in games_list])
-            batch_for_mytype[stat] = total
-
-        # range of dates and times that this batch covers
-        all_date_time = [m['match_datetime'] for m in games_list]
-        first, last = min(all_date_time), max(all_date_time)
-        fmt = '%Y-%m-%d | %H:%M'
-        batch_for_mytype['date_time_range'] = f'''Datetime Range: {first.strftime(fmt)}\nLast datetime: {last.strftime(fmt)}'''
-
-    return batch_summary
-
-def plot_lines(df_summary, to_plot):
 
     ax_cfg = [['blue', 'green'], ['-','--']] # for plots with shared axes
     num_plots = len(to_plot) + 1  # plus one to place some text
@@ -280,21 +255,20 @@ def plot_lines(df_summary, to_plot):
                     else:
                         axs_sub = axs[i] if j == 0 else axs[i].twinx()
                     sns.lineplot(data=df, x=x_range, y=substat, label=stat[j], ax=axs_sub, color=ax_cfg[0][j], ls=ax_cfg[1][j])
-                    # if not stat[1] == 'my_kills':
-                    #     ax2 = axs[i].twinx()
-                    # else: ax2 = axs[i]
-                    # ax_dupe = axs[i].twinx()
-                    # sns.lineplot(data=df, x=x_range, y=stat[j], label=stat[j], ax=ax_dupe, ls='--', color='green')
-                    # axs[i].set_ylabel(stat[0])
-                    # ax_dupe.set_ylabel(stat[1].replace('per_sec', ' Per Hour '))
-                    # ax_dupe.legend()
 
+                handles1, labels1 = axs[i].get_legend_handles_labels()
+                handles2, labels2 = axs[i].twinx().get_legend_handles_labels()
+                # Combine handles and labels
+                handles = handles1 + handles2
+                labels = labels1 + labels2
+                axs[i].legend(handles, labels)
 
+            axs[i].grid(axis='y', linestyle='--', color='gray', alpha=.5)
             # Add labels and title
             stat_str = stat.replace('per_sec', ' Per Hour ') if not is_multi_axis else f'{stat[0]} | {stat[1].replace('per_sec', ' Per Hour')}'
             axs[i].set_title(f'{stat_str} by game')
             axs[i].set_xlabel('Match Number')
-            axs[i].legend()
+            # axs[i].legend()
 
             axs[i].xaxis.set_major_locator(plt.MaxNLocator(integer=True))
 
@@ -306,14 +280,15 @@ def plot_lines(df_summary, to_plot):
     # Add some text outside the main plot area
     text_subplot = axs[num_plots-1]
     # Hide tick marks and labels
-    text_subplot.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
-    text_subplot.grid(False)
-    text_subplot.set_xlabel("Your xlabel", fontsize=12)
-    text_subplot.set_ylabel("Your ylabel", fontsize=12)
-    text_subplot.set_title("Your title", fontsize=14)
+    # text_subplot.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+    # text_subplot.grid(False)
+    # text_subplot.set_xlabel("Your xlabel", fontsize=12)
+    # text_subplot.set_ylabel("Your ylabel", fontsize=12)
+    # text_subplot.set_title("Your title", fontsize=14)
 
     # Add your text
-    text_subplot.text(0.5, 0.5, "Your text here", fontsize=14, ha='center', va='center')
+    text_subplot.text(0.0, 0.5, text_summary, fontsize=10, ha='left', va='center')
+    text_subplot.axis('off')
 
     plt.tight_layout()
     plt.show()
@@ -349,15 +324,21 @@ def plot_hists(df_summary, to_hist_plot):
         # Show plot
         plt.show()
     return
-def plot_summary_data(df_summary):
+def plot_summary_data(df_summary, tonight=False):
 
-
+    if tonight:
+        current_datetime = datetime.now()
+        twelve_hours_ago = current_datetime - timedelta(hours=12)
+        df_summary = df_summary[df_summary['match_datetime'] >= twelve_hours_ago]
+        summary_d, summary_t = df_to_summary(df_summary)
+    else:
+        summary_d, summary_t = df_to_summary(df_summary)
     to_hist_plot= ['xp_per_min', 'my_kills_per_hour', 'team_kills_per_hour', 'cash_per_min', 'cash',
        'match_timer_mins', 'team_kills']
 
     # plot_hists(df_summary, to_hist_plot)
     to_line_plot = [['team_kills', 'my_kills'], ['xp', 'xp_per_min'], ['cash', 'cash_per_min'], 'match_timer_mins']
-    plot_lines(df_summary, to_line_plot)
+    plot_lines(df_summary, to_line_plot, summary_t)
 
     # plot correlations
 
@@ -366,19 +347,67 @@ def plot_summary_data(df_summary):
     return
 def filter_key(d, key_to_ignore):
     return {k: v for k, v in d.items() if k != key_to_ignore}
-def main(dir_with_pairs, debug=False):
+
+
+def seconds_to_hours_minutes_seconds(seconds):
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    remaining_seconds = seconds % 60
+
+    if hours > 0:
+        return f"{hours} hour{'s' if hours > 1 else ''}, {minutes} minute{'s' if minutes > 1 else ''}, {remaining_seconds} second{'s' if remaining_seconds > 1 else ''}"
+    elif minutes > 0:
+        return f"{minutes} minute{'s' if minutes > 1 else ''}, {remaining_seconds} second{'s' if remaining_seconds > 1 else ''}"
+    else:
+        return f"{remaining_seconds} second{'s' if remaining_seconds > 1 else ''}"
+
+def df_to_summary(df):
+
+    sd = {}
+    to_sum = ['match_timer_secs', 'cash', 'xp', 'team_kills', 'my_kills', 'assists']
+    # to_avg_over_time = ['cash_per_min', 'xp_per_min', 'team_kills_per_hour']
+    dt_f, dt_l = df['match_datetime'].min(), df['match_datetime'].max()
+    for s in to_sum:
+        key_s, key_a = s + '_total', s + '_per_sec_avg'
+        sum_a = df[s].sum()
+        sd[key_s] = sum_a
+        sd[key_a] = sum_a / sd['match_timer_secs_total']
+    # time_s_total = sd['match_timer_secs_total']
+    # for a in to_sum:
+    #     key = a + '_avg'
+    #     total = df[s].sum() /
+
+    #     sd[key] = df[a].mean()
+    # sd['datetime_range'] = [dt_f, dt_l]
+
+    summary_text = f'''
+    Summary for {dt_f.strftime('%m/%d/%y %I:%M %p')} - {dt_l.strftime('%m/%d/%y %I:%M %p')}
+    Total Games:         {df.shape[0]}
+    Total In-Game Time:  {seconds_to_hours_minutes_seconds(sd['match_timer_secs_total'])}
+    Total Hunt Dollars: ${format(sd['cash_total'], ",")}
+    Total XP Earned:     {format(sd['xp_total'], ",")}
+    Total Team Kills:    {sd['team_kills_total']}
+    Dolchy's Kills:      {sd['my_kills_total']}
+    Avg $/Hour:          {round(sd['cash_per_sec_avg'] * 60 * 60)}
+    Avg XP/Hour:         {round(sd['xp_per_sec_avg'] * 60 * 60)}
+    Avg Team Kills/Hour: {round(sd['team_kills_per_sec_avg'] * 60 * 60, 2)}
+    '''
+
+    return sd, summary_text
+def main(dir_with_pairs, debug=False, tonight=False):
 
 
     df_game_data = get_data_from_image_pairs(dir_with_pairs, debug_rois=debug, tonight=False)
+
     # summary = get_summary_from_data(game_data_list)
     #
     # pp = pprint.PrettyPrinter(indent=4)
     # pp.pprint(filter_key(summary, 'data_by_match'))
     #
-    plot_summary_data(df_game_data)
+    plot_summary_data(df_game_data, tonight=tonight)
 
     return #summary
 
 if __name__ == '__main__':
     dir_with_pairs = Path(r'C:\Users\giles\Pictures\Screenshots')
-    main(dir_with_pairs, debug=True)
+    main(dir_with_pairs, debug=True, tonight=True)
