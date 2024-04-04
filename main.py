@@ -15,7 +15,7 @@ import numpy as np
 from tqdm import tqdm
 from cv2 import imread
 import numpy as np
-
+import cv2
 
 def crop_match_type_roi(reader, img_array):
     results = reader.readtext(img_array, text_threshold=0.3)
@@ -76,13 +76,6 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
     :param debug_rois: Bool for saving _debug_imgs directory with diagnostic images
     :return:
     '''
-    # Dict with info on how to extract details, which image to extract from, etc
-
-    from roi_coordinates import stats_extract  # here is the dict with the hard coded pixel values for ROIs
-    pairs = find_image_pairs(dir_with_pairs, tonight=tonight)
-
-    details = []
-    reader = easyocr.Reader(['en'])  # init ocr reader only once
 
     # read from cached data if it exists
     path_cache = Path('_cache.pickle')
@@ -93,8 +86,12 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
     else:
         loaded_cache = None
 
+    list_of_new_ocr_dicts = []
+    ocr_reader_initiated = False  # Only turn it on if the cache is not available or it not fully up to date
+    from roi_coordinates import stats_extract  # here is the dict with the hard coded pixel values for ROIs
 
-    for pair in tqdm(pairs):
+    pairs = find_image_pairs(dir_with_pairs, tonight=tonight)
+    for i, pair in enumerate(tqdm(pairs)):
         pairs_fp = [Path(dir_with_pairs) / x for x in pair]
         stmp_date = get_creation_time_windows(pairs_fp[0])
         pair_id = '_'.join([p.name[-9:-4] for p in pairs_fp])  # eg '(141)_(142)'
@@ -109,6 +106,10 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
             print(f'Skipping {pair_id}, loaded from cache')
             continue
 
+        # init ocr reader only once
+        if ocr_reader_initiated == False:
+            reader = easyocr.Reader(['en'])
+            ocr_reader_initiated = True
 
         im1, im2 = [imread_crop_dm(str(x)) for x in pairs_fp]
 
@@ -129,7 +130,10 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
             roi = info['roi']
             img_cropped = img_arr[roi[0]:roi[1], roi[2]:roi[3], :]
             info['img_cropped'] = img_cropped
-            ocr = crop_match_type_roi(reader, img_cropped)
+            # Try sharpening image to improve results..
+            kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+            im_sharp = cv2.filter2D(img_cropped, -1, kernel)
+            ocr = crop_match_type_roi(reader, im_sharp)
             info['ocr_raw'] = ocr
 
         # Process and save OCR data in useful format
@@ -149,10 +153,10 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
                 'hunter_name': ocr_raw_dict['hunter_name'][0]
             }
         except IndexError(f'Error extracting data with OCR. See README and {pair_id}_dbg.jpg'):
-            gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
+            gen_ocr_diagnostic(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
             continue
         if debug_rois:
-            gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
+            gen_ocr_diagnostic(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
 
         # per minute calculations
         skip_keys = ['match_id', 'match_type', 'hunter_name', 'match_timer_secs', 'match_timer_mins', 'match_datetime']
@@ -163,23 +167,23 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
             processed[f'{key}_per_min'] = val / (processed['match_timer_secs'] / 60)
             processed[f'{key}_per_hour'] = val / (processed['match_timer_secs'] / 60 / 60)
 
-        details.append(processed)
+        list_of_new_ocr_dicts.append(processed)
 
     # add any newly extracted information to the dataframe
 
-    if loaded_cache is not None and details:  # if there is a loaded cache, append any newly extracted info to it.
+    if loaded_cache is not None and list_of_new_ocr_dicts:  # if there is a loaded cache, append any newly extracted info to it.
         df = loaded_cache
-        df_to_append = pd.DataFrame(details)
+        df_to_append = pd.DataFrame(list_of_new_ocr_dicts)
         print(f'Adding to Cache: {df_to_append['match_id']}')
         df = pd.concat([df, df_to_append], ignore_index=True)
         update_cache = True
-    elif loaded_cache is None and details:  # No cache file was present, we'll write a new one
+    elif loaded_cache is None and list_of_new_ocr_dicts:  # No cache file was present, we'll write a new one
         print(f'Writing new cache! -> {path_cache}')
-        df = pd.DataFrame(details)
+        df = pd.DataFrame(list_of_new_ocr_dicts)
         update_cache = True
     else:  # If there is no loaded cache, OR if there is a loaded cache and there is no new info to append to it.
         if loaded_cache is None:
-            df = pd.DataFrame(details)
+            df = pd.DataFrame(list_of_new_ocr_dicts)
         else:
             df = loaded_cache
         print('Nothing to add to Cache.')
@@ -192,8 +196,9 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
 
     return df
 
-def gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, fname):
+def gen_ocr_diagnostic(stats_extract, ocr_raw_dict, fname):
     debug_save_loc = Path('debug_imgs')
+
     if not debug_save_loc.exists():
         debug_save_loc.mkdir()
 
@@ -201,7 +206,7 @@ def gen_ocr_diagnostirc(stats_extract, ocr_raw_dict, fname):
     for i, (stat, info) in enumerate(stats_extract.items()):
         label = f''' Stat name: {stat}\n
         Val: {ocr_raw_dict[stat]})
-        {stats_extract[stat]['roi']} 
+        loc:{stats_extract[stat]['roi']} 
         [y_start, y_end, x_start, x_end]
         img: {stats_extract[stat]['img_id']}
         '''
@@ -250,30 +255,39 @@ def get_summary_from_data(gamedata_list):
 
     return batch_summary
 
-def plot_lines(summary_dict, to_plot):
-    # all_data = [y['data_by_match'] for x, y in summary_dict.items()]  # list with length of two
-    # df_all_data = pd.DataFrame([item for sublist in all_data for item in sublist])  # combines both match type data
-    fig, axs = plt.subplots(len(to_plot), figsize=(6, 12))
+def plot_lines(df_summary, to_plot):
+
+    ax_cfg = [['blue', 'green'], ['-','--']] # for plots with shared axes
+    num_plots = len(to_plot) + 1  # plus one to place some text
+    fig, axs = plt.subplots(num_plots, figsize=(6, 12))
     fig.suptitle('Session Summary', fontsize=20, fontweight='bold')
+    match_types = df_summary['match_type'].unique()
     for i, stat in enumerate(to_plot):
-        for i_mtype, mtype in enumerate(list(summary_dict.keys())):
+        for mtype in match_types:
             if mtype == 'Soul Survivor':
                 continue
+            df = df_summary[df_summary['match_type'] == mtype]
             is_multi_axis = True if type(stat) == list else False
-            df = pd.DataFrame(summary_dict[mtype]['data_by_match'])
+
             x_range = range(1, df.shape[0] + 1)
             if not is_multi_axis:
                 sns.lineplot(data=df, x=x_range, y=stat, label=stat, ax=axs[i])
                 axs[i].set_ylabel(stat.replace('per_sec', ' Per Hour '))
             else:
-                sns.lineplot(data=df, x=x_range, y=stat[0], label=stat[0], ax=axs[i])
-                if not stat[1] == 'my_kills':
-                    ax2 = axs[i].twinx()
-                else: ax2 = axs[i]
-                sns.lineplot(data=df, x=x_range, y=stat[1], label=stat[1], ax=ax2, ls='--', color='green')
-                axs[i].set_ylabel(stat[0])
-                ax2.set_ylabel(stat[1].replace('per_sec', ' Per Hour '))
-                ax2.legend()
+                for j, substat in enumerate(stat):  # stat is actually a list of stats to be plotted on one axis
+                    if substat in ['my_kills']:  # share axis for "my kills / team kills" plot
+                        axs_sub = axs[i]
+                    else:
+                        axs_sub = axs[i] if j == 0 else axs[i].twinx()
+                    sns.lineplot(data=df, x=x_range, y=substat, label=stat[j], ax=axs_sub, color=ax_cfg[0][j], ls=ax_cfg[1][j])
+                    # if not stat[1] == 'my_kills':
+                    #     ax2 = axs[i].twinx()
+                    # else: ax2 = axs[i]
+                    # ax_dupe = axs[i].twinx()
+                    # sns.lineplot(data=df, x=x_range, y=stat[j], label=stat[j], ax=ax_dupe, ls='--', color='green')
+                    # axs[i].set_ylabel(stat[0])
+                    # ax_dupe.set_ylabel(stat[1].replace('per_sec', ' Per Hour '))
+                    # ax_dupe.legend()
 
 
             # Add labels and title
@@ -288,31 +302,36 @@ def plot_lines(summary_dict, to_plot):
         # plt.grid(True, linestyle='--', alpha=0.7)
 
         # Show plot
+
+    # Add some text outside the main plot area
+    text_subplot = axs[num_plots-1]
+    # Hide tick marks and labels
+    text_subplot.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+    text_subplot.grid(False)
+    text_subplot.set_xlabel("Your xlabel", fontsize=12)
+    text_subplot.set_ylabel("Your ylabel", fontsize=12)
+    text_subplot.set_title("Your title", fontsize=14)
+
+    # Add your text
+    text_subplot.text(0.5, 0.5, "Your text here", fontsize=14, ha='center', va='center')
+
     plt.tight_layout()
     plt.show()
 
     return
-def plot_hists(summary_dict, to_hist_plot ):
+def plot_hists(df_summary, to_hist_plot):
     plot_config = {}
 
     colors = ['blue', 'red']
-    all_data = [y['data_by_match'] for x, y in summary_dict.items()]  # list with length of two
-    df_all_data = pd.DataFrame([item for sublist in all_data for item in sublist])  # combines both match type data
+    # all_data = [y['data_by_match'] for x, y in df_summary.items()]  # list with length of two
+    # df_all_data = pd.DataFrame([item for sublist in all_data for item in sublist])  # combines both match type data
+    match_types = df_summary['match_type'].unique()
     for stat in to_hist_plot:
-
-        for i_mtype, mtype in enumerate(list(summary_dict.keys())):
+        for i_mtype, mtype in enumerate(match_types):
             # data_by_match = summary_dict[mtype]
-            df = pd.DataFrame(summary_dict[mtype]['data_by_match'])
-            # Plot histogram
-            # if 'per_sec' in stat:
-            #     df[stat] = df[stat].apply(lambda x: x * 60 * 60)  # kps -> kph
-            #     df_all_data[stat] = df_all_data[stat].apply(lambda x: x * 60 * 60)  # kps -> kph
-            # if 'match_timer_secs' in stat:
-            #     df[stat] = df[stat].apply(lambda x: x / 60)  # secs -> mins
-            #     df_all_data[stat] = df_all_data[stat].apply(lambda x: x / 60)  # secs -> mins
-
+            df = df_summary[df_summary['match_type'] == mtype]
             n_bins = 10
-            bin_range = np.linspace(min(df_all_data[stat]), max(df_all_data[stat]), n_bins)
+            bin_range = np.linspace(min(df_summary[stat]), max(df_summary[stat]), n_bins)
 
             sns.histplot(data=df, x=stat, kde=True, bins=bin_range, label=mtype, color=colors[i_mtype])
 
@@ -330,15 +349,15 @@ def plot_hists(summary_dict, to_hist_plot ):
         # Show plot
         plt.show()
     return
-def plot_summary_data(summary_dict):
+def plot_summary_data(df_summary):
 
 
     to_hist_plot= ['xp_per_min', 'my_kills_per_hour', 'team_kills_per_hour', 'cash_per_min', 'cash',
        'match_timer_mins', 'team_kills']
 
-    plot_hists(summary_dict, to_hist_plot)
+    # plot_hists(df_summary, to_hist_plot)
     to_line_plot = [['team_kills', 'my_kills'], ['xp', 'xp_per_min'], ['cash', 'cash_per_min'], 'match_timer_mins']
-    plot_lines(summary_dict, to_line_plot)
+    plot_lines(df_summary, to_line_plot)
 
     # plot correlations
 
@@ -356,7 +375,7 @@ def main(dir_with_pairs, debug=False):
     # pp = pprint.PrettyPrinter(indent=4)
     # pp.pprint(filter_key(summary, 'data_by_match'))
     #
-    # plot_summary_data(summary)
+    plot_summary_data(df_game_data)
 
     return #summary
 
