@@ -18,7 +18,7 @@ stats_extract = {
         'img_id': 'last_match_scrnshot'
     },
     'cash_xp': {
-        'roi': [950, 995, 1990, 2200],
+        'roi': [940, 1000, 1980, 2200],
         'img_id': 'mission_sum_scrnshot'
     },
     'my_kills': {
