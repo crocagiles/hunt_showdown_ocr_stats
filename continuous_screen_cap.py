@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import cv2
 from skimage import metrics
 import winsound
+from pathlib import Path
+from datetime import datetime
 
 def grayscale_screenshot():
     screenshot = pyautogui.screenshot()
@@ -25,9 +27,6 @@ def take_screenshot_and_detect(template, threshold=0.7, sound='SystemHand'):
         return True, screenshot
 
     return False, False
-
-
-
 
 def main():
 
@@ -66,7 +65,21 @@ def main():
 
     # get best match summary image (last image with good match to template)
     match_summary_ar= [c for c in ms_cache if metrics.structural_similarity(template_summary[:,:,1], c[:,:,1], full=True)[0] > .7][-1]
-    last_match_ar = last_match_ar
+
+
+    path_screenshots = Path('auto_detected_screenshots')
+    if not path_screenshots.exists():
+        path_screenshots.mkdir()
+
+    current_datetime = datetime.now()
+    datetime_stamp = current_datetime.strftime("%y%m%d%H%M")
+
+    arrays_out = [match_summary_ar, last_match_ar]
+    names_out = [path_screenshots / f'ms_{datetime_stamp}.png', path_screenshots / f'lm_{datetime_stamp}.png']
+
+    for i, n in enumerate(names_out):
+        cv2.imwrite(str(n), arrays_out[i])
+
     return
 
 
