@@ -9,7 +9,7 @@ import winsound
 from pathlib import Path
 from datetime import datetime
 
-def grayscale_screenshot():
+def take_screenshot():
     screenshot = pyautogui.screenshot()
     screenshot = np.array(screenshot)
     screenshot = cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB)
@@ -17,9 +17,9 @@ def grayscale_screenshot():
 def take_screenshot_and_detect(template, threshold=0.7, sound='SystemHand'):
     # Take a screenshot of the entire screen
 
-    screenshot = grayscale_screenshot()
+    screenshot = take_screenshot()
     # Calculate SSIM
-    ssim_score = metrics.structural_similarity(template[:,:,1], screenshot[:,:,1], full=True)
+    ssim_score = metrics.structural_similarity(template[::4,::4,1], screenshot[::4,::4,1], full=True)
     print(f"SSIM Score: ", round(ssim_score[0], 2))
 
     if ssim_score[0] > threshold:
@@ -30,29 +30,29 @@ def take_screenshot_and_detect(template, threshold=0.7, sound='SystemHand'):
 
 def main():
 
-    sleep_time = 1.5
+    sleep_time = 4
     template_summary = cv2.cvtColor(cv2.imread('example_matchsum.png'), cv2.COLOR_BGR2RGB)
     template_last_match = cv2.cvtColor(cv2.imread('example_lastmatch.png'), cv2.COLOR_BGR2RGB)
 
     ms_cache = []  # cache multiple screenshots and save the best one.
-    ms_first_detection, waiting_for_lm, lm_is_found = False, False, False
+    ms_first_detection, lm_is_found = False, False
     while True:
         if not ms_first_detection:
             ms_is_found, scrn = take_screenshot_and_detect(template_summary)
             if ms_is_found:
                 print('1st detection of match summary')
                 ms_first_detection = True
-                waiting_for_lm = True
                 ms_cache.append(scrn)
         # Triggers after match summary screen is found, waiting for last match details
-        elif waiting_for_lm and not lm_is_found:  # if match summary is seen
+        elif ms_first_detection and not lm_is_found:  # if match summary is seen
             print('Waiting for last match scrnshot')
             # keep playing sound to let user know prgm is waiting..
             winsound.PlaySound('SystemHand', winsound.SND_ALIAS)
             # start caching screenshots to save only the last good one for match summary
             # this is because ms can be found during the animation before all info is available on the screen.
-            ms_cache.append(grayscale_screenshot())
-            lm_is_found, last_match_ar = take_screenshot_and_detect(template_last_match, sound='SystemExit')
+            ms_cache.append(take_screenshot())
+            lm_is_found, last_match_ar = take_screenshot_and_detect(template_last_match, sound='SystemExit',
+                                                                    threshold=.85)
 
         # Triggers if both screenshots are found.
         elif ms_first_detection and lm_is_found:
@@ -75,7 +75,7 @@ def main():
     datetime_stamp = current_datetime.strftime("%y%m%d%H%M")
 
     arrays_out = [match_summary_ar, last_match_ar]
-    names_out = [path_screenshots / f'ms_{datetime_stamp}.png', path_screenshots / f'lm_{datetime_stamp}.png']
+    names_out = [path_screenshots / f'{datetime_stamp}_ms.png', path_screenshots / f'{datetime_stamp}_lm.png']
 
     for i, n in enumerate(names_out):
         cv2.imwrite(str(n), arrays_out[i])
@@ -84,4 +84,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+
+    while True:
+        main()
+        time.sleep(200)
