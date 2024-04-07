@@ -129,7 +129,7 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
                 img_arr = im1
 
             roi = info['roi']
-            img_cropped = img_arr[roi[0]:roi[1], roi[2]:roi[3], :]
+            img_cropped = cv2.cvtColor(img_arr[roi[0]-20:roi[1]+20, roi[2]-20:roi[3]+20, :], cv2.COLOR_BGR2RGB )
 
             # img processing to improve detection
             # kernel = np.array([[-1, -1, -1], [-1, 5, -1], [-1, -1, -1]])
@@ -140,6 +140,12 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
 
         # Process and save OCR data in useful format
         ocr_raw_dict = {stat: info['ocr_raw'] for stat, info in stats_extract.items()}
+
+        #handle weird ocr corner case? If XP is over 30K, something is probably not right.
+        xp_str = ocr_raw_dict['cash_xp'][0].replace(',', '')
+        if int(xp_str) > 30000:
+            xp_str = xp_str[0] + xp_str[2:]
+
         try:
             processed = {
                 'match_id': pair_id,
@@ -148,13 +154,13 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
                 'match_timer_secs': match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]),
                 'match_timer_mins': round(match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]) / 60),
                 'cash': int(ocr_raw_dict['cash_xp'][1].replace(',', '')),
-                'xp': int(ocr_raw_dict['cash_xp'][0].replace(',', '')),
+                'xp': int(xp_str),
                 'my_kills': int(ocr_raw_dict['my_kills'][0]) if (ocr_raw_dict['my_kills']) else 0,
                 'assists': int(ocr_raw_dict['assists'][0]) if (ocr_raw_dict['assists']) else 0,
                 'team_kills': int(ocr_raw_dict['team_kills'][0]) if (ocr_raw_dict['team_kills']) else 0,
                 'hunter_name': ocr_raw_dict['hunter_name'][0]
             }
-        except:# CustomError(f'Error extracting data with OCR. See README and {pair_id}_dbg.jpg'):
+        except:
             gen_ocr_diagnostic(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
             continue
         if debug_rois:
@@ -230,17 +236,15 @@ def gen_ocr_diagnostic(stats_extract, ocr_raw_dict, fname):
 
 def plot_lines(df_summary, to_plot, text_summary):
 
-
-
     ax_cfg = [['blue', 'green'], ['-','--']] # for plots with shared axes
     num_plots = len(to_plot) + 1  # plus one to place some text
-    fig, axs = plt.subplots(num_plots, figsize=(6, 12))
-    fig.suptitle('Session Summary', fontsize=20, fontweight='bold')
     match_types = df_summary['match_type'].unique()
-    for i, stat in enumerate(to_plot):
-        for mtype in match_types:
-            if mtype == 'Soul Survivor':
-                continue
+    for mtype in match_types:
+        fig, axs = plt.subplots(num_plots, figsize=(6, 12))
+        fig.suptitle(f'Session Summary: {mtype}', fontsize=20, fontweight='bold')
+
+        for i, stat in enumerate(to_plot):
+            i+=1 # move all plots one down
             df = df_summary[df_summary['match_type'] == mtype]
             is_multi_axis = True if type(stat) == list else False
 
@@ -256,13 +260,6 @@ def plot_lines(df_summary, to_plot, text_summary):
                         axs_sub = axs[i] if j == 0 else axs[i].twinx()
                     sns.lineplot(data=df, x=x_range, y=substat, label=stat[j], ax=axs_sub, color=ax_cfg[0][j], ls=ax_cfg[1][j])
 
-                handles1, labels1 = axs[i].get_legend_handles_labels()
-                handles2, labels2 = axs[i].twinx().get_legend_handles_labels()
-                # Combine handles and labels
-                handles = handles1 + handles2
-                labels = labels1 + labels2
-                axs[i].legend(handles, labels)
-
             axs[i].grid(axis='y', linestyle='--', color='gray', alpha=.5)
             # Add labels and title
             stat_str = stat.replace('per_sec', ' Per Hour ') if not is_multi_axis else f'{stat[0]} | {stat[1].replace('per_sec', ' Per Hour')}'
@@ -272,26 +269,26 @@ def plot_lines(df_summary, to_plot, text_summary):
 
             axs[i].xaxis.set_major_locator(plt.MaxNLocator(integer=True))
 
-        # Customize grid and ticks
-        # plt.grid(True, linestyle='--', alpha=0.7)
+            # Customize grid and ticks
+            # plt.grid(True, linestyle='--', alpha=0.7)
 
-        # Show plot
+            # Show plot
 
-    # Add some text outside the main plot area
-    text_subplot = axs[num_plots-1]
-    # Hide tick marks and labels
-    # text_subplot.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
-    # text_subplot.grid(False)
-    # text_subplot.set_xlabel("Your xlabel", fontsize=12)
-    # text_subplot.set_ylabel("Your ylabel", fontsize=12)
-    # text_subplot.set_title("Your title", fontsize=14)
+        # Add some text outside the main plot area
+        text_subplot = axs[0]
+        # Hide tick marks and labels
+        # text_subplot.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+        # text_subplot.grid(False)
+        # text_subplot.set_xlabel("Your xlabel", fontsize=12)
+        # text_subplot.set_ylabel("Your ylabel", fontsize=12)
+        # text_subplot.set_title("Your title", fontsize=14)
 
-    # Add your text
-    text_subplot.text(0.0, 0.5, text_summary, fontsize=10, ha='left', va='center')
-    text_subplot.axis('off')
+        # Add your text
+        text_subplot.text(0.0, 0.5, text_summary, fontsize=10, ha='left', va='center')
+        text_subplot.axis('off')
 
-    plt.tight_layout()
-    plt.show()
+        plt.tight_layout()
+        plt.show()
 
     return
 def plot_hists(df_summary, to_hist_plot):
@@ -302,17 +299,25 @@ def plot_hists(df_summary, to_hist_plot):
     # df_all_data = pd.DataFrame([item for sublist in all_data for item in sublist])  # combines both match type data
     match_types = df_summary['match_type'].unique()
     for stat in to_hist_plot:
+        fig, axs = plt.subplots(1, 1, figsize=(12, 6))
+
+
         for i_mtype, mtype in enumerate(match_types):
             # data_by_match = summary_dict[mtype]
             df = df_summary[df_summary['match_type'] == mtype]
-            n_bins = 10
+            n_bins = 15
             bin_range = np.linspace(min(df_summary[stat]), max(df_summary[stat]), n_bins)
 
-            sns.histplot(data=df, x=stat, kde=True, bins=bin_range, label=mtype, color=colors[i_mtype])
+            total_time = seconds_to_hours_minutes_seconds(df['match_timer_secs'].sum())
+            total_game = df.shape[0]
+            label =f'{mtype}\n{total_game} Unique Games\n{total_time} In Game'
+            sns.histplot(data=df, x=stat, kde=True, bins=bin_range, label=label, color=colors[i_mtype])
+
 
         # Add labels and title
         stat_str = stat.replace('per_sec', ' Per Hour ')
-        plt.title(f'Distribution of {stat_str}')
+        # plt.title()
+        fig.suptitle(f'Distribution of {stat_str} (game-to-game)', fontsize=20, fontweight='bold')
         plt.xlabel(stat_str)
         plt.ylabel('Frequency')
         plt.legend()
@@ -333,10 +338,10 @@ def plot_summary_data(df_summary, tonight=False):
         summary_d, summary_t = df_to_summary(df_summary)
     else:
         summary_d, summary_t = df_to_summary(df_summary)
-    to_hist_plot= ['xp_per_min', 'my_kills_per_hour', 'team_kills_per_hour', 'cash_per_min', 'cash',
+    to_hist_plot= ['xp_per_min', 'my_kills_per_hour', 'my_kills', 'team_kills_per_hour', 'cash_per_min', 'cash',
        'match_timer_mins', 'team_kills']
-
     # plot_hists(df_summary, to_hist_plot)
+
     to_line_plot = [['team_kills', 'my_kills'], ['xp', 'xp_per_min'], ['cash', 'cash_per_min'], 'match_timer_mins']
     plot_lines(df_summary, to_line_plot, summary_t)
 
@@ -381,7 +386,7 @@ def df_to_summary(df):
     # sd['datetime_range'] = [dt_f, dt_l]
 
     summary_text = f'''
-    Summary for {dt_f.strftime('%m/%d/%y %I:%M %p')} - {dt_l.strftime('%m/%d/%y %I:%M %p')}
+    Date/Time Range:     {dt_f.strftime('%m/%d/%y %I:%M %p')} - {dt_l.strftime('%m/%d/%y %I:%M %p')}
     Total Games:         {df.shape[0]}
     Total In-Game Time:  {seconds_to_hours_minutes_seconds(sd['match_timer_secs_total'])}
     Total Hunt Dollars: ${format(sd['cash_total'], ",")}
@@ -410,4 +415,4 @@ def main(dir_with_pairs, debug=False, tonight=False):
 
 if __name__ == '__main__':
     dir_with_pairs = Path(r'C:\Users\giles\Pictures\Screenshots')
-    main(dir_with_pairs, debug=True, tonight=True)
+    main(dir_with_pairs, debug=True, tonight=False)
