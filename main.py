@@ -95,7 +95,11 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
     for i, pair in enumerate(tqdm(pairs)):
         pairs_fp = [Path(dir_with_pairs) / x for x in pair]
         stmp_date = get_creation_time_windows(pairs_fp[0])
-        pair_id = '_'.join([p.name[-9:-4] for p in pairs_fp])  # eg '(141)_(142)'
+
+        if 'Screenshot' in pair[0]:  # windows screenshot names
+            pair_id = '_'.join([p.name[-9:-4] for p in pairs_fp])  # eg '(141)_(142)'
+        else:
+            pair_id = '_'.join([p.stem for p in pairs_fp])
 
         # Skip image pair if it already exists in the cache
         try:
@@ -138,8 +142,15 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
             scale_factor = 2
             upscaled = cv2.resize(img_cropped, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
             blur = cv2.blur(upscaled, (5, 5))
-            no_preprocess = ['hunter_name', 'match_type']
-            final_thumbnail = blur if not stat in no_preprocess else img_cropped
+            no_preprocess = []
+            upscale_only = ['cash_xp','hunter_name', 'match_type', 'partner_1', 'partner_2']
+
+            if stat in upscale_only:
+                final_thumbnail = upscaled
+            elif stat in no_preprocess:
+                final_thumbnail = img_cropped
+            else:
+                final_thumbnail = blur
 
             info['img_cropped'] = final_thumbnail
             ocr = crop_match_type_roi(reader, final_thumbnail)
@@ -153,7 +164,7 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
             # reader = easyocr.Reader(['en'], gpu=True, recog_network='english', download_enabled=True, detector=True,
             #                         recognizer=True)
 
-            if not ocr:
+            if not ocr and 'partner' not in stat:
                 print(f'No Char Detected: {pair_id} | {stat}')
             #     # Convert the image to grayscale
             #     gray_image = cv2.cvtColor(img_cropped, cv2.COLOR_BGR2GRAY)
@@ -165,11 +176,6 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
 
         # Process and save OCR data in useful format
         ocr_raw_dict = {stat: info['ocr_raw'] for stat, info in stats_extract.items()}
-
-        #handle weird ocr corner case? If XP is over 30K, something is probably not right.
-        # xp_str =
-        # if int(xp_str) > 30000:
-        #     xp_str = xp_str[0] + xp_str[2:]
 
         try:
             processed = {
@@ -183,7 +189,9 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
                 'my_kills': int(ocr_raw_dict['my_kills'][0]) if (ocr_raw_dict['my_kills']) else 0,
                 'assists': int(ocr_raw_dict['assists'][0]) if (ocr_raw_dict['assists']) else 0,
                 'team_kills': int(ocr_raw_dict['team_kills'][0]) if (ocr_raw_dict['team_kills']) else 0,
-                'hunter_name': ocr_raw_dict['hunter_name'][0]
+                'hunter_name': ocr_raw_dict['hunter_name'][0],
+                'partner_1': '_'.join(ocr_raw_dict.get('partner_1')),
+                'partner_2': '_'.join(ocr_raw_dict.get('partner_2')),
             }
         except:
             gen_ocr_diagnostic(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
@@ -192,7 +200,8 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
             gen_ocr_diagnostic(stats_extract, ocr_raw_dict, f'{pair_id}_dbg.jpg')
 
         # per minute calculations
-        skip_keys = ['match_id', 'match_type', 'hunter_name', 'match_timer_secs', 'match_timer_mins', 'match_datetime']
+        skip_keys = ['match_id', 'match_type', 'hunter_name', 'match_timer_secs', 'match_timer_mins', 'match_datetime',
+                     'partner_1', 'partner_2']
         for key, val in list(processed.items()):
             if key in skip_keys:
                 continue
@@ -354,16 +363,18 @@ def plot_hists(df_summary, to_hist_plot):
         # Show plot
         plt.show()
     return
-def plot_summary_data(df_summary, tonight=False):
+def plot_summary_data(df, tonight=False):
+
+    plot_partners(df)
 
     if tonight:
         current_datetime = datetime.now()
         twelve_hours_ago = current_datetime - timedelta(hours=12)
-        df_summary = df_summary[df_summary['match_datetime'] >= twelve_hours_ago]
+        df_summary = df[df['match_datetime'] >= twelve_hours_ago]
         assert not df_summary.empty,  "Tonight keyword is enabled but no match data exists from the last 12 hours."
         summary_d, summary_t = df_to_summary(df_summary)
     else:
-        summary_d, summary_t = df_to_summary(df_summary)
+        summary_d, summary_t = df_to_summary(df)
     to_hist_plot= ['xp_per_min', 'my_kills_per_hour', 'my_kills', 'team_kills_per_hour', 'cash_per_min', 'cash',
        'match_timer_mins', 'team_kills']
     if not tonight:
@@ -375,6 +386,32 @@ def plot_summary_data(df_summary, tonight=False):
     # plot correlations
 
     # TODO corrolation of match time to dollar/min, xp / min,
+
+    return
+
+def plot_partners(df):
+    # Get unique values from 'p1' and 'p2'
+    unique_values = set(df['partner_1']).union(set(df['partner_2']))
+    sum_seconds = {value: 0 for value in unique_values}
+    # Iterate over DataFrame rows
+    for index, row in df.iterrows():
+        sum_seconds[row['partner_1']] += (row['match_timer_secs'] / 60 / 60 )
+        sum_seconds[row['partner_2']] += (row['match_timer_secs'] / 60 / 60 )
+    sum_seconds.pop('')
+    sorted_sum_seconds = dict(sorted(sum_seconds.items(), key=lambda x: x[1], reverse=True))
+
+    # Print sum of seconds for each unique value
+    for key, value in sorted_sum_seconds.items():
+        print(f"Unique Value: {key}, Sum of Seconds: {seconds_to_hours_minutes_seconds(value)}")
+
+    plot_data = pd.DataFrame(sorted_sum_seconds.items(), columns=['Unique Value', 'Sum of Seconds'])
+    # Plot
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x='Sum of Seconds', y='Unique Value', data=plot_data, palette="viridis")
+    plt.xlabel('Hours Played Together')
+    plt.ylabel('Partner')
+    plt.title('Time in Game by Partner')
+    plt.show()
 
     return
 def filter_key(d, key_to_ignore):
@@ -441,5 +478,5 @@ def main(dir_with_pairs, debug=False, tonight=False):
     return #summary
 
 if __name__ == '__main__':
-    dir_with_pairs = Path(r'C:\Users\giles\Pictures\Screenshots')
+    dir_with_pairs = Path(r'C:\Users\giles\PycharmProjects\hunt_ocr_playtime_vs_xp\auto_detected_screenshots')
     main(dir_with_pairs, debug=False, tonight=False)

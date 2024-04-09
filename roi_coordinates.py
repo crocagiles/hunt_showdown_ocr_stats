@@ -36,6 +36,14 @@ stats_extract = {
     'hunter_name': {
         'roi': [370, 430, 900, 1800],
         'img_id': 'last_match_scrnshot'
+    },
+    'partner_1': {
+        'roi': [400, 450, 44, 430],
+        'img_id': 'last_match_scrnshot'
+    },
+    'partner_2': {
+        'roi': [400, 450, 2100, 2540],
+        'img_id': 'last_match_scrnshot'
     }
 }
 
