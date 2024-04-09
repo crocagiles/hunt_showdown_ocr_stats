@@ -129,22 +129,47 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
                 img_arr = im1
 
             roi = info['roi']
-            img_cropped = cv2.cvtColor(img_arr[roi[0]-20:roi[1]+20, roi[2]-20:roi[3]+20, :], cv2.COLOR_BGR2RGB )
+            expand_roi = 0
+            er = expand_roi
 
-            # img processing to improve detection
-            # kernel = np.array([[-1, -1, -1], [-1, 5, -1], [-1, -1, -1]])
-            # im_sharp = cv2.filter2D(img_cropped, -1, kernel)
-            info['img_cropped'] = img_cropped
-            ocr = crop_match_type_roi(reader, img_cropped)
+            img_cropped = cv2.cvtColor(img_arr[roi[0]-er:roi[1]+er, roi[2]-er:roi[3]+er, :], cv2.COLOR_BGR2RGB)
+
+            # Pre processing
+            scale_factor = 2
+            upscaled = cv2.resize(img_cropped, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
+            blur = cv2.blur(upscaled, (5, 5))
+            no_preprocess = ['hunter_name', 'match_type']
+            final_thumbnail = blur if not stat in no_preprocess else img_cropped
+
+            info['img_cropped'] = final_thumbnail
+            ocr = crop_match_type_roi(reader, final_thumbnail)
+
+
+
+            #
+            # import pytesseract
+            # pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            # custom_config = r'--psm 6'  # Set the page segmentation mode here
+            # reader = easyocr.Reader(['en'], gpu=True, recog_network='english', download_enabled=True, detector=True,
+            #                         recognizer=True)
+
+            if not ocr:
+                print(f'No Char Detected: {pair_id} | {stat}')
+            #     # Convert the image to grayscale
+            #     gray_image = cv2.cvtColor(img_cropped, cv2.COLOR_BGR2GRAY)
+            #
+            #     # Apply thresholding
+            #     _, binary_image = cv2.threshold(gray_image, 165, 255, cv2.THRESH_BINARY)
             info['ocr_raw'] = ocr
+
 
         # Process and save OCR data in useful format
         ocr_raw_dict = {stat: info['ocr_raw'] for stat, info in stats_extract.items()}
 
         #handle weird ocr corner case? If XP is over 30K, something is probably not right.
-        xp_str = ocr_raw_dict['cash_xp'][0].replace(',', '')
-        if int(xp_str) > 30000:
-            xp_str = xp_str[0] + xp_str[2:]
+        # xp_str =
+        # if int(xp_str) > 30000:
+        #     xp_str = xp_str[0] + xp_str[2:]
 
         try:
             processed = {
@@ -154,7 +179,7 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
                 'match_timer_secs': match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]),
                 'match_timer_mins': round(match_timer_to_secs(ocr_raw_dict['match_timer_secs'][0]) / 60),
                 'cash': int(ocr_raw_dict['cash_xp'][1].replace(',', '')),
-                'xp': int(xp_str),
+                'xp': int(ocr_raw_dict['cash_xp'][0].replace(',', '')),
                 'my_kills': int(ocr_raw_dict['my_kills'][0]) if (ocr_raw_dict['my_kills']) else 0,
                 'assists': int(ocr_raw_dict['assists'][0]) if (ocr_raw_dict['assists']) else 0,
                 'team_kills': int(ocr_raw_dict['team_kills'][0]) if (ocr_raw_dict['team_kills']) else 0,
@@ -335,12 +360,14 @@ def plot_summary_data(df_summary, tonight=False):
         current_datetime = datetime.now()
         twelve_hours_ago = current_datetime - timedelta(hours=12)
         df_summary = df_summary[df_summary['match_datetime'] >= twelve_hours_ago]
+        assert not df_summary.empty,  "Tonight keyword is enabled but no match data exists from the last 12 hours."
         summary_d, summary_t = df_to_summary(df_summary)
     else:
         summary_d, summary_t = df_to_summary(df_summary)
     to_hist_plot= ['xp_per_min', 'my_kills_per_hour', 'my_kills', 'team_kills_per_hour', 'cash_per_min', 'cash',
        'match_timer_mins', 'team_kills']
-    # plot_hists(df_summary, to_hist_plot)
+    if not tonight:
+        plot_hists(df_summary, to_hist_plot)
 
     to_line_plot = [['team_kills', 'my_kills'], ['xp', 'xp_per_min'], ['cash', 'cash_per_min'], 'match_timer_mins']
     plot_lines(df_summary, to_line_plot, summary_t)
@@ -415,4 +442,4 @@ def main(dir_with_pairs, debug=False, tonight=False):
 
 if __name__ == '__main__':
     dir_with_pairs = Path(r'C:\Users\giles\Pictures\Screenshots')
-    main(dir_with_pairs, debug=True, tonight=False)
+    main(dir_with_pairs, debug=False, tonight=False)
