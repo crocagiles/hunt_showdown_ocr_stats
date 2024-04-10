@@ -209,6 +209,19 @@ def get_data_from_image_pairs(dir_with_pairs, debug_rois=False, tonight=False):
             processed[f'{key}_per_min'] = val / (processed['match_timer_secs'] / 60)
             processed[f'{key}_per_hour'] = val / (processed['match_timer_secs'] / 60 / 60)
 
+        # Calculations of Solo / Duo / Trios mode
+
+        if processed['partner_1'] and processed['partner_2']:
+            mode = 'Trios'
+        elif processed['partner_1'] and not processed['partner_2']:
+            mode = 'Duos'
+        elif not processed['partner_1'] and processed['match_type'] == 'Bounty Hunt':
+            mode = 'Solo'
+        else:
+            mode = 'Soul Survivor'
+        processed['mode'] = mode
+
+
         list_of_new_ocr_dicts.append(processed)
 
     # add any newly extracted information to the dataframe
@@ -363,9 +376,81 @@ def plot_hists(df_summary, to_hist_plot):
         # Show plot
         plt.show()
     return
+
+def plot_gamemode(df):
+
+    df['hours'] = df['match_timer_secs'] / 60 / 60
+
+    # Group by 'mode' and calculate the sum of 'match_timer_secs'
+    grouped_data = df.groupby('mode').agg({'hours': 'sum'})
+
+    # Reset index to make 'mode' a column again
+    grouped_data = grouped_data.reset_index()
+
+    # Create a barplot
+
+    sns.barplot(x='mode', y='hours', data=grouped_data, palette="viridis")
+    sns.set_style("whitegrid")
+    # Add labels and title
+    plt.xlabel('Game Mode')
+    plt.ylabel('Hours')
+    plt.title('Hours Played by Mode')
+
+    # Show the plot
+    plt.show()
+
+    return
+
+def plot_xpcash_by_mode(df):
+
+    modes = df['mode'].unique()
+
+    grouped = df.groupby('mode').agg({'xp': 'sum', 'cash': 'sum',  'match_timer_secs': 'sum'})
+    for x in ['xp', 'cash']:
+        grouped[f'{x}_per_sec'] = grouped[x] / grouped['match_timer_secs']
+
+    # Calculate ratios
+    grouped['xp_ratio'] = grouped['xp'] / grouped['match_timer_secs']
+    grouped['cash_ratio'] = grouped['cash'] / grouped['match_timer_secs']
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Width of the bars
+    bar_width = 0.35
+
+    # Positions for the bars
+    x = np.arange(len(grouped.index))
+
+    # Bar plot for xp/match_timer_secs
+    ax.bar(x - bar_width / 2, grouped['xp_ratio'], color='skyblue', width=bar_width, label='XP per second')
+
+    # Bar plot for cash/match_timer_secs
+    ax.bar(x + bar_width / 2, grouped['cash_ratio'], color='orange', width=bar_width, label='Cash per second',
+           alpha=0.7)
+
+    # Adding labels and title
+    ax.set_xlabel('Mode')
+    ax.set_ylabel('Value Per Second of Game Time')
+    ax.set_title('Avg. Gains Per Second by Game Mode')
+    ax.set_xticks(x)
+    # ax.set_xticklabels(grouped.index)
+    ax.set_xticklabels(
+        [f"{mode}\n({seconds_to_hours_minutes_seconds(match_timer, verbose=False)} Play Time)" for mode, match_timer in zip(grouped.index, grouped['match_timer_secs'])])
+    ax.legend()
+
+    # Show plot
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+
+    return
 def plot_summary_data(df, tonight=False):
 
     plot_partners(df)
+    plot_gamemode(df)
+    plot_xpcash_by_mode(df)
 
     if tonight:
         current_datetime = datetime.now()
@@ -397,12 +482,22 @@ def plot_partners(df):
     for index, row in df.iterrows():
         sum_seconds[row['partner_1']] += (row['match_timer_secs'] / 60 / 60 )
         sum_seconds[row['partner_2']] += (row['match_timer_secs'] / 60 / 60 )
+
+    # Some user names get duplicated by OCR. fix it here.
+    derp_sum = sum(value for key, value in sum_seconds.items() if 'puppies' in key.lower())
+    sum_seconds['NuB_PuPPies'] = derp_sum
+    for key in list(sum_seconds.keys()):
+        if 'puppies' in key.lower() and not key == 'NuB_PuPPies':
+            sum_seconds.pop(key)
+
+
     sum_seconds.pop('')
     sorted_sum_seconds = dict(sorted(sum_seconds.items(), key=lambda x: x[1], reverse=True))
 
     # Print sum of seconds for each unique value
     for key, value in sorted_sum_seconds.items():
         print(f"Unique Value: {key}, Sum of Seconds: {seconds_to_hours_minutes_seconds(value)}")
+
 
     plot_data = pd.DataFrame(sorted_sum_seconds.items(), columns=['Unique Value', 'Sum of Seconds'])
     # Plot
@@ -418,17 +513,27 @@ def filter_key(d, key_to_ignore):
     return {k: v for k, v in d.items() if k != key_to_ignore}
 
 
-def seconds_to_hours_minutes_seconds(seconds):
+def seconds_to_hours_minutes_seconds(seconds, verbose=True):
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     remaining_seconds = seconds % 60
 
-    if hours > 0:
-        return f"{hours} hour{'s' if hours > 1 else ''}, {minutes} minute{'s' if minutes > 1 else ''}, {remaining_seconds} second{'s' if remaining_seconds > 1 else ''}"
-    elif minutes > 0:
-        return f"{minutes} minute{'s' if minutes > 1 else ''}, {remaining_seconds} second{'s' if remaining_seconds > 1 else ''}"
+    if verbose:
+        if hours > 0:
+            return f"{hours} hour{'s' if hours > 1 else ''}, {minutes} minute{'s' if minutes > 1 else ''}, {remaining_seconds} second{'s' if remaining_seconds > 1 else ''}"
+        elif minutes > 0:
+            return f"{minutes} minute{'s' if minutes > 1 else ''}, {remaining_seconds} second{'s' if remaining_seconds > 1 else ''}"
+        else:
+            return f"{remaining_seconds} second{'s' if remaining_seconds > 1 else ''}"
     else:
-        return f"{remaining_seconds} second{'s' if remaining_seconds > 1 else ''}"
+        result = ""
+        if hours > 0:
+            result += f"{hours} Hr "
+        if minutes > 0:
+            result += f"{minutes} M "
+        if remaining_seconds > 0 or (hours == 0 and minutes == 0):
+            result += f"{remaining_seconds} S"
+        return result.strip()
 
 def df_to_summary(df):
 
