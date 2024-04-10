@@ -281,23 +281,24 @@ def gen_ocr_diagnostic(stats_extract, ocr_raw_dict, fname):
 
 
 
-def plot_lines(df_summary, to_plot, text_summary):
+def plot_lines(df, to_plot, save_plots=False):
 
     ax_cfg = [['blue', 'green'], ['-','--']] # for plots with shared axes
     num_plots = len(to_plot) + 1  # plus one to place some text
-    match_types = df_summary['match_type'].unique()
+    match_types = df['match_type'].unique()
     for mtype in match_types:
         fig, axs = plt.subplots(num_plots, figsize=(6, 12))
         fig.suptitle(f'Session Summary: {mtype}', fontsize=20, fontweight='bold')
 
         for i, stat in enumerate(to_plot):
             i+=1 # move all plots one down
-            df = df_summary[df_summary['match_type'] == mtype]
+            df_filt = df[df['match_type'] == mtype]
+            _, text_summary = df_to_summary(df_filt)
             is_multi_axis = True if type(stat) == list else False
 
-            x_range = range(1, df.shape[0] + 1)
+            x_range = range(1, df_filt.shape[0] + 1)
             if not is_multi_axis:
-                sns.lineplot(data=df, x=x_range, y=stat, label=stat, ax=axs[i])
+                sns.lineplot(data=df_filt, x=x_range, y=stat, label=stat, ax=axs[i])
                 axs[i].set_ylabel(stat.replace('per_sec', ' Per Hour '))
             else:
                 for j, substat in enumerate(stat):  # stat is actually a list of stats to be plotted on one axis
@@ -305,7 +306,7 @@ def plot_lines(df_summary, to_plot, text_summary):
                         axs_sub = axs[i]
                     else:
                         axs_sub = axs[i] if j == 0 else axs[i].twinx()
-                    sns.lineplot(data=df, x=x_range, y=substat, label=stat[j], ax=axs_sub, color=ax_cfg[0][j], ls=ax_cfg[1][j])
+                    sns.lineplot(data=df_filt, x=x_range, y=substat, label=stat[j], ax=axs_sub, color=ax_cfg[0][j], ls=ax_cfg[1][j])
 
             axs[i].grid(axis='y', linestyle='--', color='gray', alpha=.5)
             # Add labels and title
@@ -335,10 +336,16 @@ def plot_lines(df_summary, to_plot, text_summary):
         text_subplot.axis('off')
 
         plt.tight_layout()
-        plt.show()
+        # Show plot
+        if save_plots:
+            plt.savefig(save_plots / f'{mtype}_stats_by_game.png')
+        else:
+            plt.show()
+
+        plt.close()
 
     return
-def plot_hists(df_summary, to_hist_plot):
+def plot_hists(df_summary, to_hist_plot, save_plots=False):
     plot_config = {}
 
     colors = ['blue', 'red']
@@ -374,10 +381,15 @@ def plot_hists(df_summary, to_hist_plot):
         plt.xticks(rotation=45)
 
         # Show plot
-        plt.show()
+        if save_plots:
+            plt.savefig(save_plots / f'hist_{stat}.png')
+        else:
+            plt.show()
+
+        plt.close()
     return
 
-def plot_gamemode(df):
+def plot_gamemode(df, save_plots=False):
 
     df['hours'] = df['match_timer_secs'] / 60 / 60
 
@@ -397,17 +409,18 @@ def plot_gamemode(df):
     plt.title('Hours Played by Mode')
 
     # Show the plot
-    plt.show()
-
+    if save_plots:
+        plt.savefig(save_plots / 'time_by_gamemode.png')
+    else:
+        plt.show()
+    plt.close()
     return
 
-def plot_xpcash_by_mode(df):
-
-    modes = df['mode'].unique()
+def plot_xpcash_by_mode(df, save_plots = False):
 
     grouped = df.groupby('mode').agg({'xp': 'sum', 'cash': 'sum',  'match_timer_secs': 'sum'})
-    for x in ['xp', 'cash']:
-        grouped[f'{x}_per_sec'] = grouped[x] / grouped['match_timer_secs']
+    # for x in ['xp', 'cash']:
+    #     grouped[f'{x}_per_sec'] = grouped[x] / grouped['match_timer_secs']
 
     # Calculate ratios
     grouped['xp_ratio'] = grouped['xp'] / grouped['match_timer_secs']
@@ -442,31 +455,39 @@ def plot_xpcash_by_mode(df):
     # Show plot
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.show()
+    if save_plots:
+        plt.savefig(save_plots / 'gains_per_sec.png')
+    else:
+        plt.show()
 
-
+    plt.close()
     return
-def plot_summary_data(df, tonight=False):
+def plot_summary_data(df, tonight=False, save_plots=False):
 
-    plot_partners(df)
-    plot_gamemode(df)
-    plot_xpcash_by_mode(df)
+    save_dir = Path('plot_output')
+    if save_plots and not save_dir.exists():
+        save_dir.mkdir()
 
     if tonight:
         current_datetime = datetime.now()
         twelve_hours_ago = current_datetime - timedelta(hours=12)
         df_summary = df[df['match_datetime'] >= twelve_hours_ago]
         assert not df_summary.empty,  "Tonight keyword is enabled but no match data exists from the last 12 hours."
-        summary_d, summary_t = df_to_summary(df_summary)
     else:
-        summary_d, summary_t = df_to_summary(df)
+        df_summary = df
+
     to_hist_plot= ['xp_per_min', 'my_kills_per_hour', 'my_kills', 'team_kills_per_hour', 'cash_per_min', 'cash',
        'match_timer_mins', 'team_kills']
+
+    # Long term data..
     if not tonight:
-        plot_hists(df_summary, to_hist_plot)
+        plot_hists(df_summary, to_hist_plot, save_dir)
+        plot_partners(df_summary, save_dir)
+        plot_gamemode(df_summary, save_dir)
+        plot_xpcash_by_mode(df_summary, save_dir)
 
     to_line_plot = [['team_kills', 'my_kills'], ['xp', 'xp_per_min'], ['cash', 'cash_per_min'], 'match_timer_mins']
-    plot_lines(df_summary, to_line_plot, summary_t)
+    plot_lines(df_summary, to_line_plot, save_dir)
 
     # plot correlations
 
@@ -474,7 +495,7 @@ def plot_summary_data(df, tonight=False):
 
     return
 
-def plot_partners(df):
+def plot_partners(df, save_plots=False):
     # Get unique values from 'p1' and 'p2'
     unique_values = set(df['partner_1']).union(set(df['partner_2']))
     sum_seconds = {value: 0 for value in unique_values}
@@ -489,7 +510,6 @@ def plot_partners(df):
     for key in list(sum_seconds.keys()):
         if 'puppies' in key.lower() and not key == 'NuB_PuPPies':
             sum_seconds.pop(key)
-
 
     sum_seconds.pop('')
     sorted_sum_seconds = dict(sorted(sum_seconds.items(), key=lambda x: x[1], reverse=True))
@@ -506,8 +526,13 @@ def plot_partners(df):
     plt.xlabel('Hours Played Together')
     plt.ylabel('Partner')
     plt.title('Time in Game by Partner')
-    plt.show()
 
+    if save_plots:
+        plt.savefig(save_plots / 'Partner_Time.png')
+    else:
+        plt.show()
+
+    plt.close()
     return
 def filter_key(d, key_to_ignore):
     return {k: v for k, v in d.items() if k != key_to_ignore}
@@ -568,7 +593,7 @@ def df_to_summary(df):
     '''
 
     return sd, summary_text
-def main(dir_with_pairs, debug=False, tonight=False):
+def main(dir_with_pairs, debug=False, tonight=False, save_plots = False):
 
 
     df_game_data = get_data_from_image_pairs(dir_with_pairs, debug_rois=debug, tonight=False)
@@ -578,10 +603,10 @@ def main(dir_with_pairs, debug=False, tonight=False):
     # pp = pprint.PrettyPrinter(indent=4)
     # pp.pprint(filter_key(summary, 'data_by_match'))
     #
-    plot_summary_data(df_game_data, tonight=tonight)
+    plot_summary_data(df_game_data, tonight=tonight, save_plots = save_plots)
 
     return #summary
 
 if __name__ == '__main__':
     dir_with_pairs = Path(r'C:\Users\giles\PycharmProjects\hunt_ocr_playtime_vs_xp\auto_detected_screenshots')
-    main(dir_with_pairs, debug=False, tonight=False)
+    main(dir_with_pairs, debug=False, tonight=False, save_plots = True)
